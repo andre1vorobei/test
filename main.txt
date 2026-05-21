@@ -1,2 +1,67 @@
-shit
+#include <stdint.h>
+#include "platform.h"
+
+#define A_VALUE 7u  // Константа a (из примера)
+
+// Глобальные флаги для обмена между main и int_handler
+volatile uint32_t g_input_ready = 0;
+volatile uint32_t g_input_value = 0;
+volatile uint32_t g_result = 0;
+
+// Простая функция: ASCII цифра ('0'-'9') → число
+static inline uint32_t ascii_to_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    return 0xFFFFFFFF;  // ошибка
+}
+
+int main(void) {
+    register uint32_t *RA1 __asm__("x10");  // x10 = RA1 (a0)
+    uint32_t a = A_VALUE;
+    
+    // RA1 → адрес выхода (светодиоды)
+    RA1 = (uint32_t*)&led_ptr->value;
+    
+    // Инициализация UART (если нужно — настрой баудрейт)
+    rx_ptr->baudrate = 115200;  // или 9600, как в твоём тестбенче
+    rx_ptr->parity_bit = 0;
+    rx_ptr->stop_bit = 1;
+    rx_ptr->rst = 1; __asm__ volatile (""); rx_ptr->rst = 0;  // сброс контроллера
+    
+    while (1) {
+        if (g_input_ready) {
+            uint32_t divisor = g_input_value;
+            
+            if (divisor != 0 && divisor != 0xFFFFFFFF) {
+                g_result = a / divisor;
+            } else {
+                g_result = 0xFFFFFFFF;  // ошибка
+            }
+            
+            *RA1 = g_result;  // вывод результата
+            g_input_ready = 0;  // сброс флага
+        }
+        
+        // Бесконечный цикл (требование задания)
+        __asm__ volatile ("" ::: "memory");
+    }
+}
+
+// Обработчик прерываний — читает UART
+extern "C" void int_handler(void) {
+    // Проверяем, есть ли новые данные в UART RX
+    if (rx_ptr->unread_data) {
+        char c = (char)(rx_ptr->data & 0xFF);  // берём младший байт
+        uint32_t digit = ascii_to_digit(c);
+        
+        if (digit != 0xFFFFFFFF) {
+            g_input_value = digit;
+            g_input_ready = 1;
+        }
+        
+        // Сбрасываем флаг "данные прочитаны"
+        rx_ptr->rst = 1;
+        __asm__ volatile ("");  // барьер, чтобы запись не выкинули
+        rx_ptr->rst = 0;
+    }
+}
 
